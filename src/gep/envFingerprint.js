@@ -24,9 +24,9 @@ function captureEnvFingerprint() {
     platform: process.platform,
     arch: process.arch,
     os_release: os.release(),
+    hostname: os.hostname(),
     evolver_version: pkgVersion,
     cwd: process.cwd(),
-    captured_at: new Date().toISOString(),
   };
 }
 
@@ -38,6 +38,7 @@ function envFingerprintKey(fp) {
     fp.node_version || '',
     fp.platform || '',
     fp.arch || '',
+    fp.hostname || '',
     fp.evolver_version || '',
   ].join('|');
   return crypto.createHash('sha256').update(parts, 'utf8').digest('hex').slice(0, 16);
