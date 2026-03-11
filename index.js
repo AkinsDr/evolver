@@ -24,6 +24,37 @@ function readJsonSafe(p) {
   }
 }
 
+function rejectPendingRun(statePath) {
+  try {
+    const { getRepoRoot } = require('./src/gep/paths');
+    const { execSync } = require('child_process');
+    const repoRoot = getRepoRoot();
+
+    execSync('git checkout -- .', { cwd: repoRoot, encoding: 'utf8', timeout: 30000 });
+    execSync('git clean -fd', { cwd: repoRoot, encoding: 'utf8', timeout: 30000 });
+  } catch (e) {
+    console.warn('[Loop] Pending run rollback failed: ' + (e.message || e));
+  }
+
+  try {
+    const state = readJsonSafe(statePath);
+    if (state && state.last_run && state.last_run.run_id) {
+      state.last_solidify = {
+        run_id: state.last_run.run_id,
+        rejected: true,
+        reason: 'loop_bridge_disabled_autoreject',
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', 'utf8');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[Loop] Failed to clear pending run state: ' + (e.message || e));
+  }
+
+  return false;
+}
+
 function isPendingSolidify(state) {
   const lastRun = state && state.last_run ? state.last_run : null;
   const lastSolid = state && state.last_solidify ? state.last_solidify : null;
@@ -80,6 +111,16 @@ async function main() {
   const isLoop = args.includes('--loop') || args.includes('--mad-dog');
 
   if (command === 'run' || command === '/evolve' || isLoop) {
+    if (isLoop) {
+        const originalLog = console.log;
+        const originalWarn = console.warn;
+        const originalError = console.error;
+        function ts() { return '[' + new Date().toISOString() + ']'; }
+        console.log = (...args) => { originalLog.call(console, ts(), ...args); };
+        console.warn = (...args) => { originalWarn.call(console, ts(), ...args); };
+        console.error = (...args) => { originalError.call(console, ts(), ...args); };
+    }
+
     console.log('Starting capability evolver...');
     
     if (isLoop) {
@@ -137,6 +178,16 @@ async function main() {
           try {
             await evolve.run();
             ok = true;
+
+            if (String(process.env.EVOLVE_BRIDGE || '').toLowerCase() === 'false') {
+              const stAfterRun = readJsonSafe(solidifyStatePath);
+              if (isPendingSolidify(stAfterRun)) {
+                const cleared = rejectPendingRun(solidifyStatePath);
+                if (cleared) {
+                  console.warn('[Loop] Auto-rejected pending run because bridge is disabled in loop mode.');
+                }
+              }
+            }
           } catch (error) {
             const msg = error && error.message ? String(error.message) : String(error);
             console.error(`Evolution cycle failed: ${msg}`);
