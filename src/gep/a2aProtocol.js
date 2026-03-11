@@ -399,6 +399,7 @@ var _heartbeatStartedAt = null;
 var _heartbeatConsecutiveFailures = 0;
 var _heartbeatTotalSent = 0;
 var _heartbeatTotalFailed = 0;
+var _heartbeatFpSent = false;
 var _latestAvailableWork = [];
 var _latestOverdueTasks = [];
 var _pendingCommitmentUpdates = [];
@@ -514,6 +515,11 @@ function sendHeartbeat() {
 
   if (_pendingCommitmentUpdates.length > 0) {
     meta.commitment_updates = _pendingCommitmentUpdates.splice(0);
+  }
+
+  if (!_heartbeatFpSent) {
+    try { meta.env_fingerprint = captureEnvFingerprint(); } catch {}
+    _heartbeatFpSent = true;
   }
 
   if (Object.keys(meta).length > 0) {
