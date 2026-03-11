@@ -172,20 +172,23 @@ function buildPublishBundle(opts) {
   if (!capsule || capsule.type !== 'Capsule' || !capsule.id) {
     throw new Error('publishBundle: capsule must be a valid Capsule with type and id');
   }
-  var geneAssetId = gene.asset_id || computeAssetId(gene);
-  var capsuleAssetId = capsule.asset_id || computeAssetId(capsule);
-  var nodeSecret = process.env.A2A_NODE_SECRET || getNodeId();
-  var signatureInput = [geneAssetId, capsuleAssetId].sort().join('|');
-  var signature = crypto.createHmac('sha256', nodeSecret).update(signatureInput).digest('hex');
   if (o.modelName && typeof o.modelName === 'string') {
     gene.model_name = o.modelName;
     capsule.model_name = o.modelName;
   }
+  gene.asset_id = computeAssetId(gene);
+  capsule.asset_id = computeAssetId(capsule);
+  var geneAssetId = gene.asset_id;
+  var capsuleAssetId = capsule.asset_id;
+  var nodeSecret = process.env.A2A_NODE_SECRET || getNodeId();
+  var signatureInput = [geneAssetId, capsuleAssetId].sort().join('|');
+  var signature = crypto.createHmac('sha256', nodeSecret).update(signatureInput).digest('hex');
   var assets = [gene, capsule];
   if (event && event.type === 'EvolutionEvent') {
     if (o.modelName && typeof o.modelName === 'string') {
       event.model_name = o.modelName;
     }
+    event.asset_id = computeAssetId(event);
     assets.push(event);
   }
   var publishPayload = {
