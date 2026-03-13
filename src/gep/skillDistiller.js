@@ -236,6 +236,20 @@ function buildDistillationPrompt(analysis, existingGenes, sampleCapsules) {
     '- constraints.forbidden_paths MUST include at least [".git", "node_modules"]',
     '- Output valid Gene JSON only (no markdown, no explanation)',
     '',
+    'GENE ID NAMING RULES (CRITICAL):',
+    '- The id suffix (after "' + DISTILLED_ID_PREFIX + '") MUST be a descriptive kebab-case name',
+    '  derived from the strategy content or signals_match (e.g., "retry-on-timeout", "log-rotation-cleanup")',
+    '- NEVER use timestamps, random numbers, tool names (cursor, vscode, etc.), or UUIDs in the id',
+    '- Good: "gene_distilled_retry-on-timeout", "gene_distilled_cache-invalidation-strategy"',
+    '- Bad: "gene_distilled_cursor-1773331925711", "gene_distilled_1234567890", "gene_distilled_fix-1"',
+    '- The id suffix must be 3+ words separated by hyphens, describing the core capability',
+    '',
+    'SUMMARY RULES:',
+    '- The "summary" field MUST be a clear, human-readable description (10-200 chars)',
+    '- It should describe WHAT the Gene does, not implementation details',
+    '- Good: "Retry failed HTTP requests with exponential backoff and circuit breaker"',
+    '- Bad: "Distilled from capsules", "AI agent skill", "cursor automation"',
+    '',
     'SUCCESSFUL CAPSULES (grouped by pattern):',
     JSON.stringify(samples, null, 2),
     '',
@@ -246,12 +260,42 @@ function buildDistillationPrompt(analysis, existingGenes, sampleCapsules) {
     JSON.stringify(analysis, null, 2),
     '',
     'Output a single Gene JSON object with these fields:',
-    '{ "type": "Gene", "id": "gene_distilled_...", "category": "...", "signals_match": [...], "preconditions": [...], "strategy": [...], "constraints": { "max_files": N, "forbidden_paths": [...] }, "validation": [...] }',
+    '{ "type": "Gene", "id": "gene_distilled_<descriptive-kebab-name>", "summary": "<clear human-readable description>", "category": "...", "signals_match": [...], "preconditions": [...], "strategy": [...], "constraints": { "max_files": N, "forbidden_paths": [...] }, "validation": [...] }',
   ].join('\n');
 }
 
 function distillRequestPath() {
   return path.join(paths.getMemoryDir(), 'distill_request.json');
+}
+
+// ---------------------------------------------------------------------------
+// Derive a descriptive ID from gene content when the LLM gives a bad name
+// ---------------------------------------------------------------------------
+function deriveDescriptiveId(gene) {
+  var words = [];
+  if (Array.isArray(gene.signals_match)) {
+    gene.signals_match.slice(0, 3).forEach(function (s) {
+      String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).forEach(function (w) {
+        if (w.length >= 3 && words.length < 6) words.push(w);
+      });
+    });
+  }
+  if (words.length < 3 && gene.summary) {
+    var STOP = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'when', 'are', 'was', 'has', 'had']);
+    String(gene.summary).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).forEach(function (w) {
+      if (w.length >= 3 && !STOP.has(w) && words.length < 6) words.push(w);
+    });
+  }
+  if (words.length < 3 && Array.isArray(gene.strategy) && gene.strategy.length > 0) {
+    String(gene.strategy[0]).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).forEach(function (w) {
+      if (w.length >= 3 && words.length < 6) words.push(w);
+    });
+  }
+  if (words.length < 2) words = ['auto', 'distilled', 'strategy'];
+  var unique = [];
+  var seen = new Set();
+  words.forEach(function (w) { if (!seen.has(w)) { seen.add(w); unique.push(w); } });
+  return DISTILLED_ID_PREFIX + unique.slice(0, 5).join('-');
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +313,28 @@ function validateSynthesizedGene(gene, existingGenes) {
 
   if (gene.id && !String(gene.id).startsWith(DISTILLED_ID_PREFIX)) {
     gene.id = DISTILLED_ID_PREFIX + String(gene.id).replace(/^gene_/, '');
+  }
+
+  if (gene.id) {
+    var suffix = String(gene.id).replace(DISTILLED_ID_PREFIX, '');
+    if (/^\d+$/.test(suffix) || /^\d{10,}/.test(suffix)) {
+      gene.id = deriveDescriptiveId(gene);
+    }
+    if (/^(cursor|vscode|vim|emacs|windsurf|copilot|cline|codex)[-_]?\d*/i.test(suffix)) {
+      gene.id = deriveDescriptiveId(gene);
+    }
+    var cleanSuffix = String(gene.id).replace(DISTILLED_ID_PREFIX, '');
+    if (cleanSuffix.replace(/[-_]/g, '').length < 6) {
+      gene.id = deriveDescriptiveId(gene);
+    }
+  }
+
+  if (!gene.summary || typeof gene.summary !== 'string' || gene.summary.length < 10) {
+    if (Array.isArray(gene.strategy) && gene.strategy.length > 0) {
+      gene.summary = String(gene.strategy[0]).slice(0, 200);
+    } else if (Array.isArray(gene.signals_match) && gene.signals_match.length > 0) {
+      gene.summary = 'Strategy for: ' + gene.signals_match.slice(0, 3).join(', ');
+    }
   }
 
   if (!gene.constraints || typeof gene.constraints !== 'object') gene.constraints = {};

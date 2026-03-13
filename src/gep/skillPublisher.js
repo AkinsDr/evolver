@@ -8,8 +8,35 @@ var { getHubUrl, buildHubHeaders, getNodeId } = require('./a2aProtocol');
  * @param {object} gene - Gene asset
  * @returns {string} SKILL.md content
  */
+function sanitizeSkillName(rawName) {
+  var name = rawName.replace(/^gene_distilled_/, '').replace(/^gene_/, '').replace(/_/g, '-');
+  if (/^\d{8,}/.test(name) || /^(cursor|vscode|vim|emacs|windsurf|copilot|cline|codex)[-]?\d+$/i.test(name)) {
+    return null;
+  }
+  name = name.replace(/-?\d{10,}$/g, '').replace(/-+$/, '');
+  if (name.replace(/[-]/g, '').length < 6) return null;
+  return name;
+}
+
 function geneToSkillMd(gene) {
-  var name = (gene.id || 'unnamed-skill').replace(/^gene_distilled_/, '').replace(/_/g, '-');
+  var rawName = gene.id || 'unnamed-skill';
+  var name = sanitizeSkillName(rawName);
+  if (!name) {
+    var fallbackWords = [];
+    if (Array.isArray(gene.signals_match)) {
+      gene.signals_match.slice(0, 3).forEach(function (s) {
+        String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).forEach(function (w) {
+          if (w.length >= 3 && fallbackWords.length < 5) fallbackWords.push(w);
+        });
+      });
+    }
+    if (fallbackWords.length < 2 && gene.summary) {
+      String(gene.summary).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).forEach(function (w) {
+        if (w.length >= 3 && fallbackWords.length < 5) fallbackWords.push(w);
+      });
+    }
+    name = fallbackWords.length >= 2 ? fallbackWords.join('-') : 'auto-distilled-skill';
+  }
   var desc = gene.summary || 'AI agent skill distilled from evolution experience.';
 
   var lines = [
