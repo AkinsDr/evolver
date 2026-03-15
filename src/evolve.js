@@ -170,6 +170,7 @@ function readCursorTranscripts() {
     const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
     const TARGET_BYTES = 120000;
     const PER_FILE_BYTES = 20000;
+    const RECENCY_GUARD_MS = 30 * 1000;
 
     let files = fs
       .readdirSync(CURSOR_TRANSCRIPTS_DIR)
@@ -186,6 +187,13 @@ function readCursorTranscripts() {
       .sort((a, b) => b.time - a.time);
 
     if (files.length === 0) return '';
+
+    // Skip the most recently modified file if it was touched in the last 30s --
+    // it is likely the current active session that triggered this evolver run,
+    // reading it would cause self-referencing signal noise.
+    if (files.length > 1 && (now - files[0].time) < RECENCY_GUARD_MS) {
+      files = files.slice(1);
+    }
 
     const maxFiles = Math.min(files.length, 6);
     const sections = [];
