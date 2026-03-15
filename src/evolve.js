@@ -59,6 +59,7 @@ const IS_RANDOM_DRIFT = ARGS.includes('--drift') || String(process.env.RANDOM_DR
 const MEMORY_DIR = getMemoryDir();
 const AGENT_NAME = process.env.AGENT_NAME || 'main';
 const AGENT_SESSIONS_DIR = path.join(os.homedir(), `.openclaw/agents/${AGENT_NAME}/sessions`);
+const CURSOR_TRANSCRIPTS_DIR = process.env.EVOLVER_CURSOR_TRANSCRIPTS_DIR || '';
 const TODAY_LOG = path.join(MEMORY_DIR, new Date().toISOString().split('T')[0] + '.md');
 
 // Ensure memory directory exists so state/cache writes work.
@@ -160,77 +161,125 @@ function formatSessionLog(jsonlContent) {
   return result.join('\n');
 }
 
-function readRealSessionLog() {
+function readCursorTranscripts() {
+  if (!CURSOR_TRANSCRIPTS_DIR) return '';
   try {
-    if (!fs.existsSync(AGENT_SESSIONS_DIR)) return '[NO SESSION LOGS FOUND]';
+    if (!fs.existsSync(CURSOR_TRANSCRIPTS_DIR)) return '';
 
     const now = Date.now();
-    const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+    const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
     const TARGET_BYTES = 120000;
-    const PER_SESSION_BYTES = 20000; // Read tail of each active session
+    const PER_FILE_BYTES = 20000;
 
-    // Session scope isolation: when EVOLVER_SESSION_SCOPE is set,
-    // only read sessions whose filenames contain the scope identifier.
-    // This prevents cross-channel/cross-project memory contamination.
-    const sessionScope = getSessionScope();
-
-    // Find ALL active sessions (modified in last 24h), sorted newest first
     let files = fs
-      .readdirSync(AGENT_SESSIONS_DIR)
-      .filter(f => f.endsWith('.jsonl') && !f.includes('.lock'))
+      .readdirSync(CURSOR_TRANSCRIPTS_DIR)
+      .filter(f => f.endsWith('.txt') || f.endsWith('.jsonl'))
       .map(f => {
         try {
-          const st = fs.statSync(path.join(AGENT_SESSIONS_DIR, f));
+          const st = fs.statSync(path.join(CURSOR_TRANSCRIPTS_DIR, f));
           return { name: f, time: st.mtime.getTime(), size: st.size };
         } catch (e) {
           return null;
         }
       })
       .filter(f => f && (now - f.time) < ACTIVE_WINDOW_MS)
-      .sort((a, b) => b.time - a.time); // Newest first
+      .sort((a, b) => b.time - a.time);
 
-    if (files.length === 0) return '[NO JSONL FILES]';
+    if (files.length === 0) return '';
 
-    // Skip evolver's own sessions to avoid self-reference loops
-    let nonEvolverFiles = files.filter(f => !f.name.startsWith('evolver_hand_'));
-
-    // Session scope filter: when scope is active, only include sessions
-    // whose filename contains the scope string (e.g., channel_123456.jsonl).
-    // If no sessions match the scope, fall back to all non-evolver sessions
-    // (graceful degradation -- better to evolve with global context than not at all).
-    if (sessionScope && nonEvolverFiles.length > 0) {
-      const scopeLower = sessionScope.toLowerCase();
-      const scopedFiles = nonEvolverFiles.filter(f => f.name.toLowerCase().includes(scopeLower));
-      if (scopedFiles.length > 0) {
-        nonEvolverFiles = scopedFiles;
-        console.log(`[SessionScope] Filtered to ${scopedFiles.length} session(s) matching scope "${sessionScope}".`);
-      } else {
-        console.log(`[SessionScope] No sessions match scope "${sessionScope}". Using all ${nonEvolverFiles.length} session(s) (fallback).`);
-      }
-    }
-
-    const activeFiles = nonEvolverFiles.length > 0 ? nonEvolverFiles : files.slice(0, 1);
-
-    // Read from multiple active sessions (up to 6) to get a full picture
-    const maxSessions = Math.min(activeFiles.length, 6);
+    const maxFiles = Math.min(files.length, 6);
     const sections = [];
     let totalBytes = 0;
 
-    for (let i = 0; i < maxSessions && totalBytes < TARGET_BYTES; i++) {
-      const f = activeFiles[i];
+    for (let i = 0; i < maxFiles && totalBytes < TARGET_BYTES; i++) {
+      const f = files[i];
       const bytesLeft = TARGET_BYTES - totalBytes;
-      const readSize = Math.min(PER_SESSION_BYTES, bytesLeft);
-      const raw = readRecentLog(path.join(AGENT_SESSIONS_DIR, f.name), readSize);
-      const formatted = formatSessionLog(raw);
-      if (formatted.trim()) {
-        sections.push(`--- SESSION (${f.name}) ---\n${formatted}`);
-        totalBytes += formatted.length;
+      const readSize = Math.min(PER_FILE_BYTES, bytesLeft);
+      const raw = readRecentLog(path.join(CURSOR_TRANSCRIPTS_DIR, f.name), readSize);
+      if (raw.trim() && !raw.startsWith('[MISSING]')) {
+        sections.push(`--- CURSOR SESSION (${f.name}) ---\n${raw}`);
+        totalBytes += raw.length;
       }
     }
 
-    let content = sections.join('\n\n');
+    return sections.join('\n\n');
+  } catch (e) {
+    console.warn(`[CursorTranscripts] Read failed: ${e.message}`);
+    return '';
+  }
+}
 
-    return content;
+function readRealSessionLog() {
+  try {
+    // Primary source: OpenClaw session logs (.jsonl)
+    if (fs.existsSync(AGENT_SESSIONS_DIR)) {
+      const now = Date.now();
+      const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
+      const TARGET_BYTES = 120000;
+      const PER_SESSION_BYTES = 20000;
+
+      const sessionScope = getSessionScope();
+
+      let files = fs
+        .readdirSync(AGENT_SESSIONS_DIR)
+        .filter(f => f.endsWith('.jsonl') && !f.includes('.lock'))
+        .map(f => {
+          try {
+            const st = fs.statSync(path.join(AGENT_SESSIONS_DIR, f));
+            return { name: f, time: st.mtime.getTime(), size: st.size };
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter(f => f && (now - f.time) < ACTIVE_WINDOW_MS)
+        .sort((a, b) => b.time - a.time);
+
+      if (files.length > 0) {
+        let nonEvolverFiles = files.filter(f => !f.name.startsWith('evolver_hand_'));
+
+        if (sessionScope && nonEvolverFiles.length > 0) {
+          const scopeLower = sessionScope.toLowerCase();
+          const scopedFiles = nonEvolverFiles.filter(f => f.name.toLowerCase().includes(scopeLower));
+          if (scopedFiles.length > 0) {
+            nonEvolverFiles = scopedFiles;
+            console.log(`[SessionScope] Filtered to ${scopedFiles.length} session(s) matching scope "${sessionScope}".`);
+          } else {
+            console.log(`[SessionScope] No sessions match scope "${sessionScope}". Using all ${nonEvolverFiles.length} session(s) (fallback).`);
+          }
+        }
+
+        const activeFiles = nonEvolverFiles.length > 0 ? nonEvolverFiles : files.slice(0, 1);
+
+        const maxSessions = Math.min(activeFiles.length, 6);
+        const sections = [];
+        let totalBytes = 0;
+
+        for (let i = 0; i < maxSessions && totalBytes < TARGET_BYTES; i++) {
+          const f = activeFiles[i];
+          const bytesLeft = TARGET_BYTES - totalBytes;
+          const readSize = Math.min(PER_SESSION_BYTES, bytesLeft);
+          const raw = readRecentLog(path.join(AGENT_SESSIONS_DIR, f.name), readSize);
+          const formatted = formatSessionLog(raw);
+          if (formatted.trim()) {
+            sections.push(`--- SESSION (${f.name}) ---\n${formatted}`);
+            totalBytes += formatted.length;
+          }
+        }
+
+        if (sections.length > 0) {
+          return sections.join('\n\n');
+        }
+      }
+    }
+
+    // Fallback: Cursor agent-transcripts (.txt)
+    const cursorContent = readCursorTranscripts();
+    if (cursorContent) {
+      console.log('[SessionFallback] Using Cursor agent-transcripts as session source.');
+      return cursorContent;
+    }
+
+    return '[NO SESSION LOGS FOUND]';
   } catch (e) {
     return `[ERROR READING SESSION LOGS: ${e.message}]`;
   }
