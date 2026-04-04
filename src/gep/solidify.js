@@ -989,7 +989,7 @@ function solidify({ intent, summary, dryRun = false, rollbackOnFailure = true } 
   if (!dryRun && capsule && capsule.a2a && capsule.a2a.eligible_to_broadcast) {
     const autoPublish = String(process.env.EVOLVER_AUTO_PUBLISH || 'true').toLowerCase() !== 'false';
     const visibility = String(process.env.EVOLVER_DEFAULT_VISIBILITY || 'public').toLowerCase();
-    const minPublishScore = Number(process.env.EVOLVER_MIN_PUBLISH_SCORE) || 0.78;
+    const minPublishScore = require('../config').MIN_PUBLISH_SCORE;
 
     // Skip publishing if: disabled, private, direct-reused asset, or below minimum score.
     // 'reference' mode produces a new capsule inspired by hub -- eligible for publish.
@@ -1000,7 +1000,7 @@ function solidify({ intent, summary, dryRun = false, rollbackOnFailure = true } 
         const hubUrl = (process.env.A2A_HUB_URL || '').replace(/\/+$/, '');
 
         // Pre-publish leak scan: check capsule content for sensitive data
-        const leakCheckMode = (process.env.EVOLVER_LEAK_CHECK || 'warn').toLowerCase();
+        const leakCheckMode = require('../config').LEAK_CHECK_MODE;
         if (leakCheckMode !== 'off') {
           const contentToScan = JSON.stringify(capsule) + (geneUsed ? JSON.stringify(geneUsed) : '') + (event ? JSON.stringify(event) : '');
           const leakResult = fullLeakCheck(contentToScan);

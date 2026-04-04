@@ -360,7 +360,7 @@ function fileTransportList(opts) {
 function httpTransportSend(message, opts) {
   const hubUrl = (opts && opts.hubUrl) || process.env.A2A_HUB_URL;
   if (!hubUrl) return { ok: false, error: 'A2A_HUB_URL not set' };
-  const timeoutMs = (opts && opts.timeoutMs) || 15000;
+  const timeoutMs = (opts && opts.timeoutMs) || require('../config').HTTP_TRANSPORT_TIMEOUT_MS;
   const endpoint = hubUrl.replace(/\/+$/, '') + '/a2a/' + message.message_type;
   const body = JSON.stringify(message);
   return fetch(endpoint, {
@@ -379,7 +379,7 @@ function httpTransportSend(message, opts) {
 function httpTransportReceive(opts) {
   const hubUrl = (opts && opts.hubUrl) || process.env.A2A_HUB_URL;
   if (!hubUrl) return Promise.resolve([]);
-  const timeoutMs = (opts && opts.timeoutMs) || 15000;
+  const timeoutMs = (opts && opts.timeoutMs) || require('../config').HTTP_TRANSPORT_TIMEOUT_MS;
   const assetType = (opts && opts.assetType) || null;
   const signals = (opts && Array.isArray(opts.signals)) ? opts.signals : null;
   const fetchMsg = buildFetch({ assetType: assetType, signals: signals });
@@ -479,7 +479,7 @@ function sendHelloToHub() {
     method: 'POST',
     headers: buildHubHeaders(),
     body: JSON.stringify(msg),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(require('../config').HELLO_TIMEOUT_MS),
   })
     .then(function (res) { return res.json(); })
     .then(function (data) {
@@ -577,7 +577,7 @@ function sendHeartbeat() {
     method: 'POST',
     headers: buildHubHeaders(),
     body: body,
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(require('../config').HEARTBEAT_TIMEOUT_MS),
   })
     .then(function (res) { return res.json(); })
     .then(function (data) {
@@ -730,7 +730,7 @@ function _fetchHubEvents() {
     method: 'POST',
     headers: buildHubHeaders(),
     body: body,
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(require('../config').EVENT_POLL_TIMEOUT_MS),
   })
     .then(function (res) { return res.json(); })
     .then(function (data) {

@@ -438,7 +438,7 @@ function runValidations(gene, opts = {}) {
     if (blocked) break;
     attempt++;
     if (attempt <= maxRetries) {
-      console.log('[Solidify] Validation failed (attempt ' + attempt + '/' + (maxRetries + 1) + '), retrying in 1s...');
+      console.log('[Solidify] Validation failed (attempt ' + attempt + '/' + (maxRetries + 1) + '), retrying in ' + SOLIDIFY_RETRY_INTERVAL_MS + 'ms...');
       sleepSync(SOLIDIFY_RETRY_INTERVAL_MS);
     }
   }
