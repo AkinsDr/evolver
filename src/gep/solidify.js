@@ -996,13 +996,29 @@ function solidify({ intent, summary, dryRun = false, rollbackOnFailure = true } 
     if (autoPublish && visibility === 'public' && sourceType !== 'reused' && (capsule.outcome.score || 0) >= minPublishScore) {
       try {
         const { buildPublishBundle, httpTransportSend } = require('./a2aProtocol');
-        const { sanitizePayload } = require('./sanitize');
+        const { sanitizePayload, fullLeakCheck } = require('./sanitize');
         const hubUrl = (process.env.A2A_HUB_URL || '').replace(/\/+$/, '');
 
-        if (hubUrl) {
+        // Pre-publish leak scan: check capsule content for sensitive data
+        const leakCheckMode = (process.env.EVOLVER_LEAK_CHECK || 'warn').toLowerCase();
+        if (leakCheckMode !== 'off') {
+          const contentToScan = JSON.stringify(capsule) + (geneUsed ? JSON.stringify(geneUsed) : '') + (event ? JSON.stringify(event) : '');
+          const leakResult = fullLeakCheck(contentToScan);
+          if (leakResult.found) {
+            const leakSummary = leakResult.leaks.map(function (l) { return l.type + ': ' + l.value + ' -> ' + l.suggestion; }).join('; ');
+            if (leakCheckMode === 'strict') {
+              console.warn('[LeakCheck] BLOCKED publish -- sensitive data detected: ' + leakSummary);
+              publishResult = { blocked: true, reason: 'leak_detected', leaks: leakResult.leaks.length };
+            } else {
+              console.warn('[LeakCheck] WARNING -- sensitive data detected in publish payload (will be redacted by sanitizePayload): ' + leakSummary);
+            }
+          }
+        }
+
+        if (hubUrl && !(publishResult && publishResult.blocked)) {
           // Hub requires bundle format: Gene + Capsule published together.
           // Build a Gene object from geneUsed if available; otherwise synthesize a minimal Gene.
-          const publishGene = null;
+          let publishGene = null;
           if (geneUsed && geneUsed.type === 'Gene' && geneUsed.id) {
             publishGene = sanitizePayload(geneUsed);
           } else {
@@ -1109,7 +1125,15 @@ function solidify({ intent, summary, dryRun = false, rollbackOnFailure = true } 
     if (publishAntiPatterns && hubUrl && hasHighInfoFailure) {
       try {
         const { buildPublishBundle: buildApBundle, httpTransportSend: httpApSend } = require('./a2aProtocol');
-        const { sanitizePayload: sanitizeAp } = require('./sanitize');
+        const { sanitizePayload: sanitizeAp, fullLeakCheck: fullLeakCheckAp } = require('./sanitize');
+        const apLeakMode = (process.env.EVOLVER_LEAK_CHECK || 'warn').toLowerCase();
+        if (apLeakMode !== 'off') {
+          const apContent = JSON.stringify(geneUsed || {}) + JSON.stringify(constraintCheck || {});
+          const apLeakResult = fullLeakCheckAp(apContent);
+          if (apLeakResult.found) {
+            console.warn('[LeakCheck] Anti-pattern payload has ' + apLeakResult.leaks.length + ' potential leaks (will be redacted)');
+          }
+        }
         const apGene = geneUsed && geneUsed.type === 'Gene' && geneUsed.id
           ? sanitizeAp(geneUsed)
           : { type: 'Gene', id: 'gene_unknown_' + Date.now(), category: derivedIntent, signals_match: signals.slice(0, 8), summary: 'Failed evolution gene' };

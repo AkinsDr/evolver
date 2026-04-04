@@ -360,21 +360,26 @@ function fileTransportList(opts) {
 function httpTransportSend(message, opts) {
   const hubUrl = (opts && opts.hubUrl) || process.env.A2A_HUB_URL;
   if (!hubUrl) return { ok: false, error: 'A2A_HUB_URL not set' };
+  const timeoutMs = (opts && opts.timeoutMs) || 15000;
   const endpoint = hubUrl.replace(/\/+$/, '') + '/a2a/' + message.message_type;
   const body = JSON.stringify(message);
   return fetch(endpoint, {
     method: 'POST',
     headers: buildHubHeaders(),
     body: body,
+    signal: AbortSignal.timeout(timeoutMs),
   })
-    .then(function (res) { return res.json(); })
-    .then(function (data) { return { ok: true, response: data }; })
+    .then(function (res) {
+      if (!res.ok) return res.text().then(function (t) { return { ok: false, error: 'HTTP ' + res.status + ': ' + t.slice(0, 200) }; });
+      return res.json().then(function (data) { return { ok: true, response: data }; });
+    })
     .catch(function (err) { return { ok: false, error: err.message }; });
 }
 
 function httpTransportReceive(opts) {
   const hubUrl = (opts && opts.hubUrl) || process.env.A2A_HUB_URL;
   if (!hubUrl) return Promise.resolve([]);
+  const timeoutMs = (opts && opts.timeoutMs) || 15000;
   const assetType = (opts && opts.assetType) || null;
   const signals = (opts && Array.isArray(opts.signals)) ? opts.signals : null;
   const fetchMsg = buildFetch({ assetType: assetType, signals: signals });
@@ -383,8 +388,12 @@ function httpTransportReceive(opts) {
     method: 'POST',
     headers: buildHubHeaders(),
     body: JSON.stringify(fetchMsg),
+    signal: AbortSignal.timeout(timeoutMs),
   })
-    .then(function (res) { return res.json(); })
+    .then(function (res) {
+      if (!res.ok) { console.warn('[a2aProtocol] httpTransportReceive HTTP ' + res.status); return { payload: { results: [] } }; }
+      return res.json();
+    })
     .then(function (data) {
       if (data && data.payload && Array.isArray(data.payload.results)) {
         return data.payload.results;
