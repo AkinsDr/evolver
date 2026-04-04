@@ -69,18 +69,22 @@ function parseMs(v, fallback) {
 function acquireLock() {
   const lockFile = path.join(__dirname, 'evolver.pid');
   try {
-    if (fs.existsSync(lockFile)) {
-      const pid = parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10);
-      if (!Number.isFinite(pid) || pid <= 0) {
-        console.log('[Singleton] Corrupt lock file (invalid PID). Taking over.');
-      } else {
-        try {
-          process.kill(pid, 0);
-          console.log(`[Singleton] Evolver loop already running (PID ${pid}). Exiting.`);
-          return false;
-        } catch (e) {
-          console.log(`[Singleton] Stale lock found (PID ${pid}). Taking over.`);
-        }
+    try {
+      fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx' });
+      return true;
+    } catch (exclErr) {
+      if (exclErr.code !== 'EEXIST') throw exclErr;
+    }
+    const pid = parseInt(fs.readFileSync(lockFile, 'utf8').trim(), 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      console.log('[Singleton] Corrupt lock file (invalid PID). Taking over.');
+    } else {
+      try {
+        process.kill(pid, 0);
+        console.log(`[Singleton] Evolver loop already running (PID ${pid}). Exiting.`);
+        return false;
+      } catch (e) {
+        console.log(`[Singleton] Stale lock found (PID ${pid}). Taking over.`);
       }
     }
     fs.writeFileSync(lockFile, String(process.pid));

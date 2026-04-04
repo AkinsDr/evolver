@@ -332,11 +332,29 @@ function fileTransportReceive(opts) {
   const dir = (opts && opts.dir) || defaultA2ADir();
   const subdir = path.join(dir, 'inbox');
   if (!fs.existsSync(subdir)) return [];
-  const files = fs.readdirSync(subdir).filter(function (f) { return f.endsWith('.jsonl'); });
+  const MAX_FILES = 50;
+  const MAX_FILE_BYTES = 256 * 1024;
+  const files = fs.readdirSync(subdir).filter(function (f) { return f.endsWith('.jsonl'); }).slice(0, MAX_FILES);
   const messages = [];
   for (let fi = 0; fi < files.length; fi++) {
     try {
-      const raw = fs.readFileSync(path.join(subdir, files[fi]), 'utf8');
+      const filePath = path.join(subdir, files[fi]);
+      const stat = fs.statSync(filePath);
+      let raw;
+      if (stat.size <= MAX_FILE_BYTES) {
+        raw = fs.readFileSync(filePath, 'utf8');
+      } else {
+        const fd = fs.openSync(filePath, 'r');
+        try {
+          const buf = Buffer.alloc(MAX_FILE_BYTES);
+          fs.readSync(fd, buf, 0, MAX_FILE_BYTES, stat.size - MAX_FILE_BYTES);
+          raw = buf.toString('utf8');
+          const firstNl = raw.indexOf('\n');
+          if (firstNl >= 0) raw = raw.slice(firstNl + 1);
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
       const lines = raw.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
       for (let li = 0; li < lines.length; li++) {
         try {
