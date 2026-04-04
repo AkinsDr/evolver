@@ -133,8 +133,15 @@ async function main() {
           releaseLock();
           process.exit(1);
         });
+        let _unhandledRejectionCount = 0;
         process.on('unhandledRejection', (reason) => {
-          console.error('[FATAL] Unhandled promise rejection:', reason && reason.stack ? reason.stack : String(reason));
+          _unhandledRejectionCount++;
+          console.error('[FATAL] Unhandled promise rejection (' + _unhandledRejectionCount + '):', reason && reason.stack ? reason.stack : String(reason));
+          if (_unhandledRejectionCount >= 5) {
+            console.error('[FATAL] Too many unhandled rejections (' + _unhandledRejectionCount + '). Exiting to avoid corrupt state.');
+            releaseLock();
+            process.exit(1);
+          }
         });
 
         process.env.EVOLVE_LOOP = 'true';

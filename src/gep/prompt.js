@@ -561,7 +561,7 @@ If core write is unavailable for any reason, create fallback status JSON manuall
 
 Write a JSON file with your status (cross-platform):
 \`\`\`bash
-node -e "require('fs').mkdirSync('${(process.env.WORKSPACE_DIR || '.').replace(/\\/g, '/')}/logs',{recursive:true});require('fs').writeFileSync('${(process.env.WORKSPACE_DIR || '.').replace(/\\/g, '/')}/logs/status_${cycleId}.json',JSON.stringify({result:'success',en:'Status: [INTENT] ...',zh:'...'},null,2))"
+node -e "var d=${JSON.stringify((process.env.WORKSPACE_DIR || '.').replace(/\\/g, '/'))};require('fs').mkdirSync(d+'/logs',{recursive:true});require('fs').writeFileSync(d+'/logs/status_${cycleId}.json',JSON.stringify({result:'success',en:'Status: [INTENT] ...',zh:'...'},null,2))"
 \`\`\`
 
 Rules:
