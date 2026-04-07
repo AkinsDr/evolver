@@ -118,20 +118,24 @@ function formatSessionLog(jsonlContent) {
     }
   };
 
+  function extractContentArray(arr) {
+    if (!Array.isArray(arr)) return '';
+    return arr.map(c => {
+      if (c.type === 'text' || c.type === 'input_text' || c.type === 'output_text')
+        return c.text || '';
+      if (c.type === 'tool_use' || c.type === 'toolCall' || c.type === 'function_call')
+        return `[TOOL: ${c.name || 'unknown'}]`;
+      if (c.type === 'tool_result')
+        return c.is_error ? `[TOOL ERROR] ${String(c.content || '').slice(0, 200)}` : '';
+      if (c.type === 'thinking') return '';
+      return '';
+    }).filter(Boolean).join(' ');
+  }
+
   function extractContent(data) {
-    // Claude Code: content is array of {type, text/tool_use/tool_result/thinking}
-    // OpenClaw: similar structure under data.message.content
     const msg = data.message || {};
     const raw = msg.content || data.content;
-    if (Array.isArray(raw)) {
-      return raw.map(c => {
-        if (c.type === 'text') return c.text || '';
-        if (c.type === 'tool_use') return `[TOOL: ${c.name || 'unknown'}]`;
-        if (c.type === 'tool_result') return c.is_error ? `[TOOL ERROR] ${String(c.content || '').slice(0, 200)}` : '';
-        if (c.type === 'thinking') return ''; // skip thinking blocks
-        return '';
-      }).filter(Boolean).join(' ');
-    }
+    if (Array.isArray(raw)) return extractContentArray(raw);
     if (typeof raw === 'string') return raw;
     return '';
   }
@@ -142,17 +146,31 @@ function formatSessionLog(jsonlContent) {
       const data = JSON.parse(line);
       let entry = '';
 
-      // Claude Code format: top-level type is 'user', 'assistant', 'tool_result', etc.
-      // OpenClaw format: top-level type is 'message' wrapping role/content
+      // --- Agent format detection ---
+      // Claude Code: top-level type is 'user'|'assistant'
       const isClaudeCode = data.type === 'user' || data.type === 'assistant';
-      const isOpenClaw = data.type === 'message' && data.message;
-      const isToolResult = data.type === 'tool_result' || (data.message && data.message.role === 'toolResult');
+      // OpenClaw: type='message' wrapping message object (exclude toolResult)
+      const isOpenClaw = data.type === 'message' && data.message
+        && data.message.role !== 'toolResult';
+      // Cursor: top-level 'role' without 'type', with 'message' object
+      const isCursor = !data.type && data.role && data.message;
+      // Codex CLI: item events from rollout JSONL
+      const isCodexItem = (data.type === 'item.added' || data.type === 'item.completed') && data.item;
+      // Manus API: type ends with _message or is tool_used
+      const isManus = data.type === 'user_message' || data.type === 'assistant_message';
+      const isManusToolUsed = data.type === 'tool_used';
+      // Tool results (Claude Code / OpenClaw)
+      const isToolResult = data.type === 'tool_result'
+        || (data.message && data.message.role === 'toolResult');
+      // Codex function_call_output (nested in item)
+      const isCodexFnOutput = isCodexItem && data.item.type === 'function_call_output';
 
-      if (isClaudeCode || isOpenClaw) {
-        const role = ((data.message && data.message.role) || data.type || 'unknown').toUpperCase();
+      if (isClaudeCode || isOpenClaw || isCursor) {
+        const role = (
+          (data.message && data.message.role) || data.role || data.type || 'unknown'
+        ).toUpperCase();
         let content = extractContent(data);
 
-        // Capture LLM errors from errorMessage field (e.g. "Unsupported MIME type: image/gif")
         if (data.message && data.message.errorMessage) {
           const errMsg = typeof data.message.errorMessage === 'string'
             ? data.message.errorMessage
@@ -160,37 +178,59 @@ function formatSessionLog(jsonlContent) {
           content = `[LLM ERROR] ${errMsg.replace(/\n+/g, ' ').slice(0, 300)}`;
         }
 
-        // Filter: Skip Heartbeats to save noise
         if (content.trim() === 'HEARTBEAT_OK') continue;
         if (content.includes('NO_REPLY') && !(data.message && data.message.errorMessage)) continue;
-        // Filter: Skip Claude Code internal meta messages
         if (data.isMeta) continue;
 
-        // Clean up newlines for compact reading
         content = content.replace(/\n+/g, ' ').slice(0, 300);
         if (content.trim()) {
           entry = `**${role}**: ${content}`;
         }
-      } else if (isToolResult) {
-        // Filter: Skip generic success results or short uninformative ones
-        // Only show error or significant output
-        let resContent = '';
 
-        // Robust extraction: Handle structured tool results (e.g. sessions_spawn) that lack 'output'
-        if (data.tool_result) {
-          if (data.tool_result.output) {
-            resContent = data.tool_result.output;
-          } else {
-            resContent = JSON.stringify(data.tool_result);
+      } else if (isCodexItem) {
+        const item = data.item;
+        if (item.type === 'message') {
+          const role = (item.role || 'unknown').toUpperCase();
+          const content = Array.isArray(item.content)
+            ? extractContentArray(item.content)
+            : (typeof item.content === 'string' ? item.content : '');
+          if (content.trim()) {
+            entry = `**${role}**: ${content.replace(/\n+/g, ' ').slice(0, 300)}`;
+          }
+        } else if (item.type === 'function_call') {
+          entry = `[TOOL: ${item.name || item.call_id || 'unknown'}]`;
+        } else if (item.type === 'function_call_output') {
+          const out = (item.output || '').replace(/\n+/g, ' ').slice(0, 200);
+          if (out.trim() && !(out.length < 50 && (out.includes('success') || out.includes('done')))) {
+            entry = `[TOOL RESULT] ${out}${(item.output || '').length > 200 ? '...' : ''}`;
           }
         }
 
-        if (data.content) resContent = typeof data.content === 'string' ? data.content : JSON.stringify(data.content);
+      } else if (isManus) {
+        const payload = data[data.type] || {};
+        const role = data.type === 'user_message' ? 'USER' : 'ASSISTANT';
+        const content = (typeof payload.content === 'string' ? payload.content : '')
+          .replace(/\n+/g, ' ').slice(0, 300);
+        if (content.trim()) {
+          entry = `**${role}**: ${content}`;
+        }
 
+      } else if (isManusToolUsed) {
+        const tool = data.tool_used || {};
+        entry = `[TOOL: ${tool.name || 'unknown'}]`;
+
+      } else if (isToolResult || isCodexFnOutput) {
+        let resContent = '';
+        if (data.tool_result) {
+          resContent = data.tool_result.output || JSON.stringify(data.tool_result);
+        }
+        if (data.content) {
+          resContent = typeof data.content === 'string'
+            ? data.content : JSON.stringify(data.content);
+        }
         if (resContent.length < 50 && (resContent.includes('success') || resContent.includes('done'))) continue;
         if (resContent.trim() === '' || resContent === '{}') continue;
 
-        // Improvement: Show snippet of result (especially errors) instead of hiding it
         const preview = resContent.replace(/\n+/g, ' ').slice(0, 200);
         entry = `[TOOL RESULT] ${preview}${resContent.length > 200 ? '...' : ''}`;
       }
@@ -253,38 +293,45 @@ function formatCursorTranscript(raw) {
   return result.join('\n');
 }
 
+function collectTranscriptFiles(dir, maxDepth) {
+  const results = [];
+  function walk(d, depth) {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (ent.isFile() && (ent.name.endsWith('.jsonl') || ent.name.endsWith('.txt'))) {
+        const fp = path.join(d, ent.name);
+        try {
+          const st = fs.statSync(fp);
+          results.push({ path: fp, name: ent.name, time: st.mtime.getTime(), size: st.size });
+        } catch { /* skip unreadable */ }
+      } else if (ent.isDirectory() && ent.name !== 'subagents' && ent.name !== 'node_modules') {
+        walk(path.join(d, ent.name), depth + 1);
+      }
+    }
+  }
+  walk(dir, 0);
+  return results;
+}
+
 function readCursorTranscripts() {
   if (!CURSOR_TRANSCRIPTS_DIR) return '';
   try {
     if (!fs.existsSync(CURSOR_TRANSCRIPTS_DIR)) return '';
 
     const now = Date.now();
-    // Claude Code session logs (.jsonl) are write-once — mtime never updates
-    // after the session ends, so use a 7-day window instead of 24h.
     const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
     const TARGET_BYTES = 120000;
     const PER_FILE_BYTES = 20000;
     const RECENCY_GUARD_MS = 30 * 1000;
 
-    let files = fs
-      .readdirSync(CURSOR_TRANSCRIPTS_DIR)
-      .filter(f => f.endsWith('.txt') || f.endsWith('.jsonl'))
-      .map(f => {
-        try {
-          const st = fs.statSync(path.join(CURSOR_TRANSCRIPTS_DIR, f));
-          return { name: f, time: st.mtime.getTime(), size: st.size };
-        } catch (e) {
-          return null;
-        }
-      })
-      .filter(f => f && (now - f.time) < ACTIVE_WINDOW_MS)
+    let files = collectTranscriptFiles(CURSOR_TRANSCRIPTS_DIR, 3)
+      .filter(f => (now - f.time) < ACTIVE_WINDOW_MS)
       .sort((a, b) => b.time - a.time);
 
     if (files.length === 0) return '';
 
-    // Skip the most recently modified file if it was touched in the last 30s --
-    // it is likely the current active session that triggered this evolver run,
-    // reading it would cause self-referencing signal noise.
     if (files.length > 1 && (now - files[0].time) < RECENCY_GUARD_MS) {
       files = files.slice(1);
     }
@@ -297,10 +344,8 @@ function readCursorTranscripts() {
       const f = files[i];
       const bytesLeft = TARGET_BYTES - totalBytes;
       const readSize = Math.min(PER_FILE_BYTES, bytesLeft);
-      const raw = readRecentLog(path.join(CURSOR_TRANSCRIPTS_DIR, f.name), readSize);
+      const raw = readRecentLog(f.path, readSize);
       if (raw.trim() && !raw.startsWith('[MISSING]')) {
-        // Use JSON-aware formatter for .jsonl files (Claude Code, OpenClaw),
-        // plain-text formatter for .txt files (Cursor agent-transcripts).
         const isJsonl = f.name.endsWith('.jsonl');
         const formatted = isJsonl ? formatSessionLog(raw) : formatCursorTranscript(raw);
         if (formatted.trim()) {
@@ -2057,5 +2102,5 @@ ${mutationDirective}
   }
 }
 
-module.exports = { run, computeAdaptiveStrategyPolicy, shouldSkipHubCalls, verbose, determineBridgeEnabled };
+module.exports = { run, computeAdaptiveStrategyPolicy, shouldSkipHubCalls, verbose, determineBridgeEnabled, formatSessionLog, formatCursorTranscript };
 
